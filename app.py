@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, render_template
 from flask_cors import CORS
 import os
 import requests
@@ -15,6 +15,10 @@ TWENTY_API_URL = os.getenv("TWENTY_API_URL")
 
 app = Flask(__name__)
 CORS(app)
+
+@app.route("/")
+def home():
+    return render_template("index.html")
 
 MAX_LIMIT = 200
 MAX_PAGES = 50
@@ -57,7 +61,7 @@ def fetch_all(endpoint, collection_name):
         if starting_after:
             params["starting_after"] = starting_after
 
-        print("Calling:", f"{TWENTY_API_URL}properties")
+        print("Calling:", f"{TWENTY_API_URL}{endpoint}")
         response = requests.get(
             f"{TWENTY_API_URL}{endpoint}",
             headers=headers,
