@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jumbo Homes | Property Radar</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+    <style>
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; background: #f4f6f8; }
+        
+        /* Top Nav & Global Search */
+        #top-nav { background: #111; color: white; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; z-index: 1000; }
+        #global-search-container { position: relative; flex: 1; max-width: 400px; margin-left: 20px; }
+        #global-search { width: 100%; padding: 8px 12px; border-radius: 4px; border: none; font-size: 14px; box-sizing: border-box; }
+        .autocomplete-dropdown { position: absolute; top: 100%; left: 0; right: 0; background: white; color: black; border: 1px solid #ccc; border-radius: 0 0 4px 4px; max-height: 250px; overflow-y: auto; z-index: 2000; display: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .autocomplete-item { padding: 10px; cursor: pointer; border-bottom: 1px solid #eee; font-size: 13px; }
+        .autocomplete-item:hover { background: #f0f0f0; }
+        
+        /* Buttons */
+        .btn-sync { background: #28a745; color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-right: 15px;}
+        .btn-sync:disabled { background: #6c757d; cursor: not-allowed; }
+        .btn-primary { background: #007bff; color: white; border: none; padding: 10px; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 10px;}
+        .btn-secondary { background: #6c757d; color: white; border: none; padding: 10px; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 10px;}
+        .btn-whatsapp { background: #25D366; color: white; border: none; padding: 10px; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 10px; display: none; }
+        .btn-anchor { background: #007bff; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; width: 100%; margin-top: 10px;}
+        
+        /* Workspace Layout */
+        #main-workspace { display: flex; flex: 1; height: calc(100vh - 60px); }
+        #sidebar { width: 350px; background: white; border-right: 1px solid #ddd; padding: 20px; box-sizing: border-box; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        #content-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        #map-container { flex: 2; position: relative; border-bottom: 2px solid #ccc; }
+        #map { width: 100%; height: 100%; }
+        
+        /* Results Table */
+        #table-container { flex: 1; background: white; overflow-y: auto; display: none; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { background: #f8f9fa; position: sticky; top: 0; padding: 10px; text-align: left; border-bottom: 2px solid #ddd; z-index: 10; }
+        td { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; }
+        tr:hover td { background: #f1f8ff; }
+
+        /* Filter Controls */
+        .mode-toggle { display: flex; background: #e9ecef; border-radius: 6px; overflow: hidden; margin-bottom: 10px; }
+        .mode-toggle button { flex: 1; padding: 8px; border: none; background: transparent; cursor: pointer; font-weight: bold; color: #495057; }
+        .mode-toggle button.active { background: #007bff; color: white; }
+        
+        .control-group { background: #f8f9fa; padding: 12px; border-radius: 6px; border: 1px solid #eee; }
+        .control-group label { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 8px; font-size: 13px; color: #333; }
+        .control-group input[type="text"], .control-group input[type="number"], .control-group select { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 13px; }
+        .control-group input[type="range"] { width: 100%; cursor: pointer; }
+        
+        .multi-select-container { max-height: 120px; overflow-y: auto; border: 1px solid #ccc; border-radius: 4px; background: white; padding: 5px; }
+        .multi-select-item { display: flex; align-items: center; padding: 4px 0; font-size: 13px; }
+        .multi-select-item input { margin-right: 8px; }
+
+        /* Map Popups */
+        .popup-building-title { font-size: 16px; font-weight: bold; margin: 0 0 10px 0; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+        .popup-prop-list { max-height: 150px; overflow-y: auto; font-size: 12px; margin: 0; padding: 0; list-style: none; }
+        .popup-prop-list li { padding: 5px 0; border-bottom: 1px solid #f1f1f1; }
+    </style>
+</head>
+<body>
+
+    <div id="top-nav">
+        <div style="display: flex; align-items: center; flex: 1;">
+            <strong style="font-size: 18px;">🏠 Jumbo Homes Radar</strong>
+            <div id="global-search-container">
+                <input type="text" id="global-search" placeholder="Search property, building, zone, pincode..." autocomplete="off" disabled>
+                <div id="global-search-dropdown" class="autocomplete-dropdown"></div>
+            </div>
+        </div>
+        <div style="text-align:right; display: flex; align-items: center;">
+            <button class="btn-sync" onclick="fetchLiveProperties()" id="sync-btn">🔄 Sync CRM Data</button>
+            <div style="text-align: right;">
+                <div id="sync-status" style="font-size:12px; margin-bottom: 2px; color:white;">Status: Ready</div>
+                <div id="last-sync" style="font-size:11px; color:#cfcfcf;">Last Sync: Never</div>
+            </div>
+        </div>
+    </div>
+    
+    <div id="main-workspace">
+        <div id="sidebar">
+            <div class="mode-toggle">
+                <button id="btn-mode-existing" class="active" onclick="setMode('existing')">Existing Home</button>
+                <button id="btn-mode-freeform" onclick="setMode('freeform')">Free-form</button>
+            </div>
+            
+            <div id="mode-existing-container" style="position: relative;">
+                <div class="control-group">
+                    <label>Target Property</label>
+                    <input type="text" id="existing-home-search" placeholder="Search by Property Name..." autocomplete="off">
+                </div>
+                <div id="existing-search-dropdown" class="autocomplete-dropdown" style="top: 65px;"></div>
+                <div id="selected-target-card" style="display: none; margin-top: 10px; padding: 10px; background: #e3f2fd; border: 1px solid #90caf9; border-radius: 4px; font-size: 12px;">
+                    <strong id="target-prop-name">Name</strong><br>
+                    Price: <span id="target-prop-price"></span><br>
+                    <button onclick="clearTargetProperty()" style="margin-top: 5px; font-size: 11px; padding: 3px 8px;">Clear Target</button>
+                </div>
+            </div>
+            
+            <div id="mode-freeform-container" class="control-group" style="display: none;">
+                <label>Target Price (₹)</label>
+                <input type="number" id="filter-price" placeholder="e.g. 15000000">
+            </div>
+
+            <div class="control-group">
+                <label>Radius: <span id="val-radius">5 km</span></label>
+                <input type="range" id="filter-distance" min="0.5" max="50" step="0.5" value="5" oninput="document.getElementById('val-radius').innerText = this.value + ' km'">
+            </div>
+            
+            <div class="control-group">
+                <label>Price Delta (+/-): <span id="val-delta">10%</span></label>
+                <input type="range" id="filter-delta" min="0" max="100" step="1" value="10" oninput="document.getElementById('val-delta').innerText = this.value + '%'">
+            </div>
+            
+            <div class="control-group">
+                <label>Configuration</label>
+                <select id="filter-config">
+                    <option value="ALL">Any Config</option>
+                    <option value="OPT1_RK">1 RK</option>
+                    <option value="OPT1_BHK">1 BHK</option>
+                    <option value="OPT1_5_BHK">1.5 BHK</option>
+                    <option value="OPT2_BHK">2 BHK</option>
+                    <option value="OPT2_5_BHK">2.5 BHK</option>
+                    <option value="OPT3_BHK">3 BHK</option>
+                    <option value="OPT3_5_BHK">3.5 BHK</option>
+                    <option value="OPT4_BHK">4 BHK</option>
+                    <option value="OPT5_BHK">5 BHK</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label>Facing</label>
+                <select id="filter-facing">
+                    <option value="ALL">Any</option>
+                    <option value="North">North</option>
+                    <option value="South">South</option>
+                    <option value="East">East</option>
+                    <option value="West">West</option>
+                    <option value="North-East">North-East</option>
+                    <option value="North-West">North-West</option>
+                    <option value="South-East">South-East</option>
+                    <option value="South-West">South-West</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label>Floor</label>
+                <div class="multi-select-container" id="filter-floor-container">
+                    <label class="multi-select-item"><input type="checkbox" value="Ground" class="floor-cb"> Ground</label>
+                    <label class="multi-select-item"><input type="checkbox" value="20+" class="floor-cb"> 20+</label>
+                </div>
+            </div>
+            
+            <div>
+                <button class="btn-primary" onclick="applyFilters()">🔍 Run Search</button>
+                <button class="btn-secondary" onclick="clearFilters()">❌ Clear Map & Filters</button>
+                <button class="btn-whatsapp" id="btn-whatsapp" onclick="copyWhatsAppSummary()">💬 Copy WhatsApp Summary</button>
+            </div>
+        </div>
+        
+        <div id="content-area">
+            <div id="map-container">
+                <div id="map"></div>
+            </div>
+            <div id="table-container">
+                <table id="results-table">
+                    <thead>
+                        <tr>
+                            <th>Property Name</th>
+                            <th>Building</th>
+                            <th>Config</th>
+                            <th>Sqft</th>
+                            <th>Facing</th>
+                            <th>Floor</th>
+                            <th>Price</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="results-body">
+                        </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // === GLOBAL STATE ===
+        let map;
+        let propertyLayerGroup;
+        let zoneLayerGroup;
+        let anchorMarker = null;
+        let anchorCoords = null;
+
+        let masterCatalog = [];
+        let masterZones = [];
+        let buildingGroups = {};
+        let zoneLookup = {}; 
+
+        let searchMode = 'existing'; // 'existing' | 'freeform'
+        let selectedTargetProperty = null; 
+        let currentFilteredProperties = []; // for whatsapp export
+
+        // === 1. INIT UI & MAP ===
+        function init() {
+            // Populate Floor Checkboxes
+            const floorContainer = document.getElementById('filter-floor-container');
+            let floorHtml = `<label class="multi-select-item"><input type="checkbox" value="Ground" class="floor-cb"> Ground</label>`;
+            for(let i=1; i<=20; i++){
+                floorHtml += `<label class="multi-select-item"><input type="checkbox" value="${i}" class="floor-cb"> Floor ${i}</label>`;
+            }
+            floorHtml += `<label class="multi-select-item"><input type="checkbox" value="20+" class="floor-cb"> 20+</label>`;
+            floorContainer.innerHTML = floorHtml;
+
+            // Map Setup
+            map = L.map('map', { preferCanvas: true }).setView([12.9716, 77.5946], 11);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+            zoneLayerGroup = L.layerGroup().addTo(map);
+            propertyLayerGroup = L.layerGroup().addTo(map);
+
+            map.on('contextmenu', function(e) {
+                setAnchor(e.latlng.lat, e.latlng.lng);
+            });
+
+            setupAutocompleteListeners();
+        }
+
+        function setMode(mode) {
+            searchMode = mode;
+            document.getElementById('btn-mode-existing').classList.toggle('active', mode === 'existing');
+            document.getElementById('btn-mode-freeform').classList.toggle('active', mode === 'freeform');
+            
+            document.getElementById('mode-existing-container').style.display = mode === 'existing' ? 'block' : 'none';
+            document.getElementById('mode-freeform-container').style.display = mode === 'freeform' ? 'block' : 'none';
+        }
+
+        function setAnchor(lat, lng) {
+            if (anchorMarker) map.removeLayer(anchorMarker);
+            anchorCoords = [lng, lat]; 
+            
+            anchorMarker = L.marker([lat, lng], {
+                icon: L.icon({
+                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+                    iconSize: [25, 41],
+                    iconAnchor: [12, 41],
+                    popupAnchor: [1, -34]
+                })
+            }).bindPopup("<b>⚓ Anchor Point</b>").addTo(map);
+            
+            anchorMarker.openPopup();
+        }
+
+        // === FORMATTING HELPERS ===
+        function getRawPrice(prop) {
+            if (prop.latestPrice && prop.latestPrice.amountMicros) {
+                return prop.latestPrice.amountMicros / 1000000;
+            }
+            return null;
+        }
+
+        function formatPriceIndian(prop) {
+            const inr = getRawPrice(prop);
+            if (!inr) return 'N/A';
+            if (inr >= 10000000) return (inr / 10000000).toFixed(2).replace(/\.00$/, '') + ' Cr'; 
+            if (inr >= 100000) return (inr / 100000).toFixed(2).replace(/\.00$/, '') + ' L';
+            return inr.toLocaleString('en-IN');
+        }
+
+        function cleanConfigName(configString) {
+            if (!configString || configString === 'ALL') return 'Any';
+            return configString.replace('OPT', '').replace('_5', '.5').replace(/_/g, ' ').trim();
+        }
+
+        // === 2. FETCH DATA ===
+        const API_BASE =
+            window.location.hostname === "localhost"
+                ? "http://localhost:5000"
+                : ""https://twenty-bsa-homes.onrender.com";
+
+        async function fetchLiveProperties() {
+
+            const syncBtn = document.getElementById("sync-btn");
+
+            syncBtn.disabled = true;
+            syncBtn.innerText = "⏳ Syncing...";
+
+            document.getElementById("sync-status").innerHTML =
+                "Status: 🟡 In Progress";
+
+            try {
+
+                const response = await fetch(
+                    `${API_BASE}/api/properties`
+                );
+                if (!response.ok) throw new Error("Backend connection failed");
+                const rawData = await response.json();
+                
+                if (rawData.data && rawData.data.properties) {
+                    masterCatalog = rawData.data.properties || [];
+                    masterZones = rawData.data.zones || [];
+
+                    zoneLookup = {};
+                    masterZones.forEach(zone => zoneLookup[zone.id] = zone);
+                    
+                    renderZones();
+                    processBuildings(masterCatalog);
+                    
+                    document.getElementById('global-search').disabled = false;
+                }
+                
+                syncBtn.disabled = false;
+                syncBtn.innerText = "🔄 Sync CRM Data";
+                document.getElementById("sync-status").innerHTML = "Status: 🟢 Synced";
+                document.getElementById("last-sync").innerHTML = "Last Sync: " + new Date().toLocaleString();
+                
+            } catch (error) {
+                console.error(error);
+                syncBtn.disabled = false;
+                syncBtn.innerText = "🔄 Sync CRM Data";
+                document.getElementById("sync-status").innerHTML = "Status: 🔴 Failed";
+            }
+        }
+
+        // === 3. PROCESS & MAP ===
+        function processBuildings(properties) {
+            buildingGroups = {};
+            properties.forEach(prop => {
+                if (!prop.building || !prop.building.latitude || !prop.building.longitude) return;
+                
+                const bldgId = prop.building.id || ("Unknown_" + Math.random());
+                const zone = zoneLookup[prop.building.zoneId];
+
+                if (!buildingGroups[bldgId]) {
+                    buildingGroups[bldgId] = {
+                        id: bldgId,
+                        name: prop.building.name || "Unknown Building",
+                        lat: parseFloat(prop.building.latitude),
+                        lng: parseFloat(prop.building.longitude),
+                        zoneId: prop.building.zoneId || null,
+                        zoneName: zone ? zone.name : "Unknown",
+                        properties: [],
+                        marker: null
+                    };
+                }
+                buildingGroups[bldgId].properties.push(prop);
+            });
+            renderMap(buildingGroups);
+        }
+
+        function renderMap(buildingsToRender) {
+            propertyLayerGroup.clearLayers();
+            
+            Object.values(buildingsToRender).forEach(bldg => {
+                let propListHTML = bldg.properties.map(p => {
+                    return `
+                        <li style="padding:8px 0;border-bottom:1px solid #eee;">
+                            <b>${p.name || "Unnamed Property"}</b>
+                            <span style="float:right; background:#eee; padding:2px 6px; border-radius:4px; font-size:11px;">
+                                ${p.propertyStatus || "Unknown"}
+                            </span><br>
+                            <span style="color:#007bff;font-weight:bold;">₹${formatPriceIndian(p)}</span><br>
+                            <span style="font-size:11px;color:#666;">📐 ${p.squareFeet ? Number(p.squareFeet).toLocaleString("en-IN") : "N/A"} sqft</span> | 
+                            <span style="font-size:11px;color:#666;">🧭 ${p.facing || "N/A"}</span> | 
+                            <span style="font-size:11px;color:#666;">🏢 Floor ${p.floor || "N/A"}</span>
+                        </li>`;
+                }).join("");
+
+                const popupHTML = `
+                    <div style="min-width:260px">
+                        <h3 class="popup-building-title">🏢 ${bldg.name}</h3>
+                        <p style="font-size:12px">Zone: <b>${bldg.zoneName}</b><br>Units: <b>${bldg.properties.length}</b></p>
+                        <ul class="popup-prop-list">${propListHTML}</ul>
+                        <button class="btn-anchor" onclick="setAnchor(${bldg.lat},${bldg.lng})">📍 Set as Anchor</button>
+                    </div>`;
+
+                const marker = L.marker([bldg.lat, bldg.lng], { icon: getZoneMarker(bldg.zoneName) })
+                    .bindPopup(popupHTML)
+                    .addTo(propertyLayerGroup);
+                
+                // Store marker ref for programmatic zooming/popup opening
+                bldg.marker = marker;
+            });
+        }
+
+        function renderZones() {
+            zoneLayerGroup.clearLayers();
+            masterZones.forEach(zone => {
+                try {
+                    if (!zone.geoFence || zone.geoFence.length < 3) return;
+                    const coordinates = zone.geoFence.map(point => JSON.parse(point));
+                    const polygon = L.polygon(coordinates, {
+                        color: getZoneColour(zone.name),
+                        fillColor: getZoneColour(zone.name),
+                        fillOpacity: 0.12,
+                        weight: 2
+                    }).addTo(zoneLayerGroup);
+                    polygon.bringToBack();
+                } catch (e) {}
+            });
+        }
+
+        // === 4. SEARCH & AUTOCOMPLETE ===
+        function setupAutocompleteListeners() {
+            // Global Search
+            const globalSearch = document.getElementById('global-search');
+            const globalDrop = document.getElementById('global-search-dropdown');
+            
+            globalSearch.addEventListener('input', (e) => {
+                const query = e.target.value.toLowerCase();
+                if(query.length < 2) { globalDrop.style.display = 'none'; return; }
+                
+                let matches = [];
+                // Search Properties
+                masterCatalog.forEach(p => {
+                    if(matches.length > 15) return;
+                    if(p.name && p.name.toLowerCase().includes(query)) matches.push({type: 'Property', item: p, display: p.name});
+                });
+                // Search Buildings & Zones via buildingGroups
+                Object.values(buildingGroups).forEach(b => {
+                    if(matches.length > 25) return;
+                    if(b.name.toLowerCase().includes(query) || b.zoneName.toLowerCase().includes(query)) {
+                        matches.push({type: 'Locality', item: b, display: `${b.name} (${b.zoneName})`});
+                    }
+                });
+
+                renderDropdown(globalDrop, matches, (match) => {
+                    let targetLat, targetLng, bldgId;
+                    if (match.type === 'Property') {
+                        targetLat = match.item.building.latitude;
+                        targetLng = match.item.building.longitude;
+                        bldgId = match.item.building.id;
+                    } else {
+                        targetLat = match.item.lat;
+                        targetLng = match.item.lng;
+                        bldgId = match.item.id;
+                    }
+                    map.setView([targetLat, targetLng], 17);
+                    if (buildingGroups[bldgId] && buildingGroups[bldgId].marker) {
+                        buildingGroups[bldgId].marker.openPopup();
+                    }
+                    globalSearch.value = match.display;
+                    globalDrop.style.display = 'none';
+                });
+            });
+
+            // Existing Home Target Search
+            const existSearch = document.getElementById('existing-home-search');
+            const existDrop = document.getElementById('existing-search-dropdown');
+
+            existSearch.addEventListener('input', (e) => {
+                const query = e.target.value.toLowerCase();
+                if(query.length < 2) { existDrop.style.display = 'none'; return; }
+
+                let matches = masterCatalog.filter(p => p.name && p.name.toLowerCase().includes(query)).slice(0, 10);
+                let formattedMatches = matches.map(m => ({type: 'Property', item: m, display: m.name}));
+                
+                renderDropdown(existDrop, formattedMatches, (match) => {
+                    const p = match.item;
+                    selectedTargetProperty = p;
+                    document.getElementById('target-prop-name').innerText = p.name;
+                    document.getElementById('target-prop-price').innerText = "₹" + formatPriceIndian(p);
+                    document.getElementById('selected-target-card').style.display = 'block';
+                    
+                    existSearch.value = "";
+                    existDrop.style.display = 'none';
+
+                    if (p.building && p.building.latitude) {
+                        map.setView([p.building.latitude, p.building.longitude], 16);
+                        setAnchor(p.building.latitude, p.building.longitude);
+                        if (buildingGroups[p.building.id] && buildingGroups[p.building.id].marker) {
+                            buildingGroups[p.building.id].marker.openPopup();
+                        }
+                    }
+                });
+            });
+
+            // Close dropdowns on outside click
+            document.addEventListener('click', (e) => {
+                if(!e.target.closest('#global-search-container')) globalDrop.style.display = 'none';
+                if(!e.target.closest('#mode-existing-container')) existDrop.style.display = 'none';
+            });
+        }
+
+        function renderDropdown(container, matches, onSelect) {
+            container.innerHTML = "";
+            if(matches.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+            matches.forEach(m => {
+                let div = document.createElement('div');
+                div.className = 'autocomplete-item';
+                div.innerHTML = `<b>${m.display}</b> <span style="font-size:10px; color:gray; float:right;">${m.type}</span>`;
+                div.onclick = () => onSelect(m);
+                container.appendChild(div);
+            });
+            container.style.display = 'block';
+        }
+
+        function clearTargetProperty() {
+            selectedTargetProperty = null;
+            document.getElementById('selected-target-card').style.display = 'none';
+        }
+
+        // === 5. FILTER ENGINE ===
+        function checkFloor(propFloor, selectedFloors) {
+            if (selectedFloors.length === 0) return true; // Any
+            if (!propFloor) return false;
+            let f = propFloor.toString().toLowerCase().trim();
+            if (f === 'ground' || f === 'g') return selectedFloors.includes('Ground');
+            
+            let num = parseInt(f);
+            if (isNaN(num)) return false;
+            if (num >= 20 && selectedFloors.includes('20+')) return true;
+            return selectedFloors.includes(num.toString());
+        }
+
+        function applyFilters() {
+            if (!anchorCoords) {
+                alert("Please select a Target Property or Right-Click on the map to set an Anchor point first.");
+                return;
+            }
+
+            // Determine Target Price based on Mode
+            let targetPrice = null;
+            if (searchMode === 'existing') {
+                if (!selectedTargetProperty) {
+                    alert("Please select a Target Property to search around, or switch to Free-form mode.");
+                    return;
+                }
+                targetPrice = getRawPrice(selectedTargetProperty);
+            } else {
+                targetPrice = parseFloat(document.getElementById('filter-price').value);
+                if (!targetPrice || isNaN(targetPrice)) {
+                    alert("Please enter a Target Price in Free-form mode.");
+                    return;
+                }
+            }
+
+            const maxDist = parseFloat(document.getElementById('filter-distance').value);
+            const deltaPercent = parseFloat(document.getElementById('filter-delta').value) / 100;
+            const reqConfig = document.getElementById('filter-config').value;
+            const reqFacing = document.getElementById('filter-facing').value;
+            
+            const floorCheckboxes = document.querySelectorAll('.floor-cb:checked');
+            const selectedFloors = Array.from(floorCheckboxes).map(cb => cb.value);
+
+            let filteredBuildings = {};
+            currentFilteredProperties = [];
+            const anchorPoint = turf.point(anchorCoords);
+
+            Object.values(buildingGroups).forEach(bldg => {
+                const bldgPoint = turf.point([bldg.lng, bldg.lat]);
+                const distanceKm = turf.distance(anchorPoint, bldgPoint, {units: 'kilometers'});
+                
+                if (distanceKm <= maxDist) {
+                    const matchingProps = bldg.properties.filter(p => {
+                        // Skip the EXACT target property if we are in existing mode
+                        if (searchMode === 'existing' && selectedTargetProperty && p.id === selectedTargetProperty.id) {
+                            return false; 
+                        }
+
+                        let configMatch = (reqConfig === 'ALL' || p.configuration === reqConfig);
+                        let facingMatch = (reqFacing === 'ALL' || (p.facing && p.facing.toLowerCase() === reqFacing.toLowerCase()));
+                        let floorMatch = checkFloor(p.floor, selectedFloors);
+                        
+                        let priceMatch = false;
+                        const actualPrice = getRawPrice(p);
+                        if (targetPrice && actualPrice) {
+                            const minPrice = targetPrice - (targetPrice * deltaPercent);
+                            const maxPrice = targetPrice + (targetPrice * deltaPercent);
+                            priceMatch = (actualPrice >= minPrice && actualPrice <= maxPrice);
+                        }
+                        
+                        if (configMatch && facingMatch && floorMatch && priceMatch) {
+                            currentFilteredProperties.push(p);
+                            return true;
+                        }
+                        return false;
+                    });
+
+                    if (matchingProps.length > 0) {
+                        filteredBuildings[bldg.id] = { ...bldg, properties: matchingProps };
+                    }
+                }
+            });
+
+            renderMap(filteredBuildings);
+            renderTable(currentFilteredProperties);
+            
+            if(currentFilteredProperties.length > 0) {
+                document.getElementById('btn-whatsapp').style.display = 'block';
+            } else {
+                document.getElementById('btn-whatsapp').style.display = 'none';
+            }
+        }
+
+        // === 6. RESULTS TABLE ===
+        function renderTable(properties) {
+            const container = document.getElementById('table-container');
+            const tbody = document.getElementById('results-body');
+            tbody.innerHTML = '';
+
+            if(properties.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+
+            properties.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><b>${p.name || 'N/A'}</b></td>
+                    <td>${p.building?.name || 'N/A'}</td>
+                    <td>${cleanConfigName(p.configuration)}</td>
+                    <td>${p.squareFeet || '-'}</td>
+                    <td>${p.facing || '-'}</td>
+                    <td>${p.floor || '-'}</td>
+                    <td style="color:#007bff;font-weight:bold;">₹${formatPriceIndian(p)}</td>
+                    <td>${p.propertyStatus || '-'}</td>
+                `;
+                
+                tr.onclick = () => {
+                    if (p.building && p.building.latitude) {
+                        map.setView([p.building.latitude, p.building.longitude], 17);
+                        if (buildingGroups[p.building.id] && buildingGroups[p.building.id].marker) {
+                            buildingGroups[p.building.id].marker.openPopup();
+                        }
+                    }
+                };
+                
+                tbody.appendChild(tr);
+            });
+            
+            container.style.display = 'block';
+        }
+
+        function clearFilters() {
+            if (anchorMarker) map.removeLayer(anchorMarker);
+            anchorCoords = null;
+            clearTargetProperty();
+            
+            document.getElementById('filter-price').value = '';
+            document.getElementById('filter-config').value = 'ALL';
+            document.getElementById('filter-facing').value = 'ALL';
+            document.querySelectorAll('.floor-cb').forEach(cb => cb.checked = false);
+            
+            document.getElementById('table-container').style.display = 'none';
+            document.getElementById('btn-whatsapp').style.display = 'none';
+            currentFilteredProperties = [];
+            
+            renderMap(buildingGroups); 
+        }
+
+        // === 7. WHATSAPP EXPORT ===
+        function copyWhatsAppSummary() {
+            if(currentFilteredProperties.length === 0) return;
+            
+            let targetName = (searchMode === 'existing' && selectedTargetProperty) ? selectedTargetProperty.name : "your target criteria";
+            
+            let text = `Thanks for showing interest in ${targetName}.\n\nIn addition to this property, we recommend visiting similar properties nearby to better understand the current market offerings.\n\nRecommended homes:\n\n`;
+            
+            currentFilteredProperties.forEach(p => {
+                let loc = p.building?.name ? ` (${p.building.name})` : '';
+                text += `• ${p.name}${loc} - ₹${formatPriceIndian(p)} | ${cleanConfigName(p.configuration)}\n`;
+            });
+            
+            text += `\nWe'd be happy to help schedule visits for these as well.`;
+            
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = document.getElementById('btn-whatsapp');
+                const origText = btn.innerText;
+                btn.innerText = "✅ Copied to Clipboard!";
+                setTimeout(() => btn.innerText = origText, 3000);
+            }).catch(err => alert("Failed to copy text: " + err));
+        }
+
+        // === COLORS & MARKERS ===
+        function getZoneColour(name){
+            const colours = { "North": "#648FFF", "Whitefield": "#785EF0", "Sarjapura": "#DC267F", "Electronic City": "#FE6100", "Haralur": "#009E73", "Bellandur": "#3CB44B", "KR Puram": "#000000", "Varthur": "#CC79A7" };
+            return colours[name] || "#808080";
+        }
+        function getZoneMarker(zoneName) {
+            const markerColours = { "North": "blue", "Whitefield": "violet", "Sarjapura": "red", "Electronic City": "orange", "Haralur": "green", "Bellandur": "blue", "KR Puram": "black", "Varthur": "grey" };
+            const colour = zoneName ? (markerColours[zoneName] || "red") : "red";
+            return L.icon({
+                iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${colour}.png`,
+                shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
+                iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41]
+            });
+        }
+
+        // Boot
+        init();
+    </script>
+</body>
+</html>
