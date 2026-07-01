@@ -57,6 +57,7 @@ def fetch_all(endpoint, collection_name):
         if starting_after:
             params["starting_after"] = starting_after
 
+        print("Calling:", f"{TWENTY_API_URL}properties")
         response = requests.get(
             f"{TWENTY_API_URL}{endpoint}",
             headers=headers,
