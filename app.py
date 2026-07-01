@@ -134,16 +134,16 @@ def get_properties():
         })
 
     except Exception as e:
-    import traceback
+        import traceback
 
-    print("=" * 80)
-    print("FULL EXCEPTION")
-    traceback.print_exc()
-    print("=" * 80)
-
-    return jsonify({
-        "error": str(e)
-    }), 500
+        print("=" * 80)
+        print("FULL EXCEPTION")
+        traceback.print_exc()
+        print("=" * 80)
+    
+        return jsonify({
+            "error": str(e)
+        }), 500
 
 if __name__ == "__main__":
 
