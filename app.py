@@ -143,12 +143,15 @@ def get_properties():
 
 if __name__ == "__main__":
 
+    port = int(os.environ.get("PORT", 5000))
+
     print("=" * 60)
     print("🚀 Jumbo Homes Backend")
-    print("http://localhost:5000")
+    print(f"Running on port {port}")
     print("=" * 60)
 
     app.run(
-        port=5000,
-        debug=True
+        host="0.0.0.0",
+        port=port,
+        debug=False
     )

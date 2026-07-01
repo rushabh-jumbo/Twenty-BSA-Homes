@@ -277,14 +277,26 @@
         }
 
         // === 2. FETCH DATA ===
+        const API_BASE =
+            window.location.hostname === "localhost"
+                ? "http://localhost:5000"
+                : "https://YOUR-RENDER-APP.onrender.com";
+
         async function fetchLiveProperties() {
-            const syncBtn = document.getElementById('sync-btn');
+
+            const syncBtn = document.getElementById("sync-btn");
+
             syncBtn.disabled = true;
             syncBtn.innerText = "⏳ Syncing...";
-            document.getElementById("sync-status").innerHTML = "Status: 🟡 In Progress";
-            
+
+            document.getElementById("sync-status").innerHTML =
+                "Status: 🟡 In Progress";
+
             try {
-                const response = await fetch('http://localhost:5000/api/properties');
+
+                const response = await fetch(
+                    `${API_BASE}/api/properties`
+                );
                 if (!response.ok) throw new Error("Backend connection failed");
                 const rawData = await response.json();
                 
