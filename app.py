@@ -87,6 +87,10 @@ def fetch_all(endpoint, collection_name):
 # API Routes
 # =====================================================
 
+@app.route("/")
+def home():
+    return render_template("index.html")
+
 @app.route("/api/properties", methods=["GET"])
 def get_properties():
     """STRICTLY READ-ONLY: Returns memory instantly or asks frontend to sync."""
