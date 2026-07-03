@@ -4,6 +4,7 @@ import os
 import requests
 import threading
 import traceback
+import time
 from dotenv import load_dotenv
 
 # =====================================================
@@ -26,8 +27,8 @@ SERVER_CACHE = {
     "zones": None
 }
 
-MAX_LIMIT = 200
-MAX_PAGES = 50
+MAX_LIMIT = 50
+MAX_PAGES = 200
 
 def get_headers():
     return {
@@ -37,7 +38,7 @@ def get_headers():
     }
 
 def fetch_all(endpoint, collection_name):
-    """Generic paginator for Twenty CRM endpoints."""
+    """Generic paginator for Twenty CRM endpoints with retry logic."""
     headers = get_headers()
     all_records = []
     starting_after = None
@@ -55,16 +56,26 @@ def fetch_all(endpoint, collection_name):
         if starting_after:
             params["starting_after"] = starting_after
 
-        response = requests.get(
-            f"{TWENTY_API_URL}{endpoint}",
-            headers=headers,
-            params=params
-        )
+        max_retries = 3
+        payload = None
+        
+        for attempt in range(max_retries):
+            response = requests.get(
+                f"{TWENTY_API_URL}{endpoint}",
+                headers=headers,
+                params=params
+            )
 
-        if response.status_code != 200:
-            raise Exception(f"{endpoint} failed ({response.status_code})\n{response.text}")
+            if response.status_code == 200:
+                payload = response.json()
+                break
+            else:
+                print(f"⚠️ Attempt {attempt + 1} failed for {endpoint}: {response.status_code}")
+                if attempt < max_retries - 1:
+                    time.sleep(2) # Wait 2 seconds before retrying
+                else:
+                    raise Exception(f"{endpoint} failed after {max_retries} attempts ({response.status_code})\n{response.text}")
 
-        payload = response.json()
         page_records = payload.get("data", {}).get(collection_name, [])
         all_records.extend(page_records)
 
