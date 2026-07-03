@@ -145,6 +145,16 @@
                 <div class="multi-select-container" id="filter-floor-container">
                     </div>
             </div>
+
+            <div class="control-group">
+                <label>Status</label>
+                <select id="filter-status">
+                    <option value="ALL">Any</option>
+                    <option value="Available">Available</option>
+                    <option value="Sold">Sold</option>
+                    <option value="Hold">Hold</option>
+                </select>
+            </div>
             
             <div>
                 <button class="btn-primary" onclick="applyFilters()">🔍 Run Search</button>
@@ -422,36 +432,80 @@
         function setupAutocompleteListeners() {
             const globalSearch = document.getElementById('global-search');
             const globalDrop = document.getElementById('global-search-dropdown');
+            let searchTimeout = null;
             
             globalSearch.addEventListener('input', (e) => {
-                const query = e.target.value.toLowerCase();
+                const query = e.target.value.toLowerCase().trim();
                 if(query.length < 2) { globalDrop.style.display = 'none'; return; }
                 
                 let matches = [];
+                
+                // 1. FAST LOCAL SEARCH (CRM Data)
                 masterCatalog.forEach(p => {
-                    if(matches.length > 15) return;
-                    if(p.name && p.name.toLowerCase().includes(query)) matches.push({type: 'Property', item: p, display: p.name});
+                    if(matches.length > 5) return;
+                    if(p.name && p.name.toLowerCase().includes(query)) {
+                        matches.push({type: 'Property', item: p, display: p.name});
+                    }
                 });
                 Object.values(buildingGroups).forEach(b => {
-                    if(matches.length > 25) return;
+                    if(matches.length > 10) return;
                     if(b.name.toLowerCase().includes(query) || b.zoneName.toLowerCase().includes(query)) {
-                        matches.push({type: 'Locality', item: b, display: `${b.name} (${b.zoneName})`});
+                        matches.push({type: 'Building', item: b, display: `${b.name} (${b.zoneName})`});
                     }
                 });
 
-                renderDropdown(globalDrop, matches, (match) => {
-                    let targetLat, targetLng, bldgId;
-                    if (match.type === 'Property') {
-                        targetLat = match.item.building.latitude; targetLng = match.item.building.longitude; bldgId = match.item.building.id;
-                    } else {
-                        targetLat = match.item.lat; targetLng = match.item.lng; bldgId = match.item.id;
+                renderDropdown(globalDrop, matches, handleGlobalSelect);
+
+                // 2. EXTERNAL GEOCODING (OSM Nominatim)
+                clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(async () => {
+                    try {
+                        const fetchUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query + " Bengaluru")}&limit=4`;
+                        const response = await fetch(fetchUrl);
+                        const geoResults = await response.json();
+
+                        if (geoResults && geoResults.length > 0) {
+                            const geoMatches = geoResults.map(g => ({
+                                type: 'Map Location', 
+                                item: { lat: parseFloat(g.lat), lng: parseFloat(g.lon) }, 
+                                display: g.display_name.split(',')[0] + ' (' + (g.type || 'place') + ')'
+                            }));
+                            matches = [...matches, ...geoMatches];
+                            renderDropdown(globalDrop, matches, handleGlobalSelect);
+                        }
+                    } catch(err) {
+                        console.error("External search failed", err);
                     }
+                }, 600); 
+            });
+
+            function handleGlobalSelect(match) {
+                let targetLat, targetLng, bldgId;
+                
+                if (match.type === 'Property') {
+                    targetLat = match.item.building.latitude; 
+                    targetLng = match.item.building.longitude; 
+                    bldgId = match.item.building.id;
                     map.setView([targetLat, targetLng], 17);
                     if (buildingGroups[bldgId] && buildingGroups[bldgId].marker) buildingGroups[bldgId].marker.openPopup();
-                    globalSearch.value = match.display;
-                    globalDrop.style.display = 'none';
-                });
-            });
+                
+                } else if (match.type === 'Building') {
+                    targetLat = match.item.lat; 
+                    targetLng = match.item.lng; 
+                    bldgId = match.item.id;
+                    map.setView([targetLat, targetLng], 17);
+                    if (buildingGroups[bldgId] && buildingGroups[bldgId].marker) buildingGroups[bldgId].marker.openPopup();
+                
+                } else if (match.type === 'Map Location') {
+                    targetLat = match.item.lat;
+                    targetLng = match.item.lng;
+                    map.setView([targetLat, targetLng], 14);
+                    setAnchor(targetLat, targetLng); 
+                }
+                
+                globalSearch.value = match.display;
+                globalDrop.style.display = 'none';
+            }
 
             const existSearch = document.getElementById('existing-home-search');
             const existDrop = document.getElementById('existing-search-dropdown');
@@ -533,6 +587,7 @@
             const deltaPercent = parseFloat(document.getElementById('filter-delta').value) / 100;
             const reqConfig = document.getElementById('filter-config').value;
             const reqFacing = document.getElementById('filter-facing').value;
+            const reqStatus = document.getElementById('filter-status').value;
             
             const floorCheckboxes = document.querySelectorAll('.floor-cb:checked');
             const selectedFloors = Array.from(floorCheckboxes).map(cb => cb.value);
@@ -552,6 +607,7 @@
                         let configMatch = (reqConfig === 'ALL' || p.configuration === reqConfig);
                         let facingMatch = (reqFacing === 'ALL' || (p.facing && p.facing.toLowerCase() === reqFacing.toLowerCase()));
                         let floorMatch = checkFloor(p.floor, selectedFloors);
+                        let statusMatch = (reqStatus === 'ALL' || (p.propertyStatus && p.propertyStatus.toLowerCase() === reqStatus.toLowerCase()));
                         
                         let priceMatch = false;
                         const actualPrice = getRawPrice(p);
@@ -561,7 +617,7 @@
                             priceMatch = (actualPrice >= minPrice && actualPrice <= maxPrice);
                         }
                         
-                        if (configMatch && facingMatch && floorMatch && priceMatch) {
+                        if (configMatch && facingMatch && floorMatch && statusMatch && priceMatch) {
                             currentFilteredProperties.push(p); return true;
                         }
                         return false;
@@ -612,8 +668,10 @@
             if (anchorMarker) map.removeLayer(anchorMarker);
             anchorCoords = null; clearTargetProperty();
             
-            document.getElementById('filter-price').value = ''; document.getElementById('filter-config').value = 'ALL';
+            document.getElementById('filter-price').value = ''; 
+            document.getElementById('filter-config').value = 'ALL';
             document.getElementById('filter-facing').value = 'ALL';
+            document.getElementById('filter-status').value = 'ALL';
             document.querySelectorAll('.floor-cb').forEach(cb => cb.checked = false);
             
             document.getElementById('table-container').style.display = 'none';
