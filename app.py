@@ -2,8 +2,9 @@ from flask import Flask, jsonify, render_template
 from flask_cors import CORS
 import os
 import requests
-from dotenv import load_dotenv
+import threading
 import traceback
+from dotenv import load_dotenv
 
 # =====================================================
 # Load Environment Variables
@@ -14,14 +15,13 @@ TWENTY_API_KEY = os.getenv("TWENTY_API_KEY")
 TWENTY_API_URL = os.getenv("TWENTY_API_URL")
 
 app = Flask(__name__)
-# Allowing all origins for ease of frontend integration. 
-# Update this with your Vercel URL in production for security.
 CORS(app)
 
 # =====================================================
 # Global Cache Memory
 # =====================================================
 SERVER_CACHE = {
+    "status": "empty",  # States: 'empty', 'syncing', 'ready', 'error'
     "properties": None,
     "zones": None
 }
@@ -55,7 +55,6 @@ def fetch_all(endpoint, collection_name):
         if starting_after:
             params["starting_after"] = starting_after
 
-        print("Calling:", f"{TWENTY_API_URL}{endpoint}")
         response = requests.get(
             f"{TWENTY_API_URL}{endpoint}",
             headers=headers,
@@ -83,6 +82,21 @@ def fetch_all(endpoint, collection_name):
     print(f"✅ Finished {collection_name}: {len(all_records)} records\n")
     return all_records
 
+def background_sync_task():
+    """Runs in the background so Render doesn't timeout the HTTP request."""
+    global SERVER_CACHE
+    try:
+        SERVER_CACHE["status"] = "syncing"
+        SERVER_CACHE["properties"] = fetch_all("properties", "properties")
+        SERVER_CACHE["zones"] = fetch_all("zoneallocations", "zoneallocations")
+        SERVER_CACHE["status"] = "ready"
+    except Exception as e:
+        print("=" * 80)
+        print("BACKGROUND SYNC EXCEPTION")
+        traceback.print_exc()
+        print("=" * 80)
+        SERVER_CACHE["status"] = "error"
+
 # =====================================================
 # API Routes
 # =====================================================
@@ -93,46 +107,32 @@ def home():
 
 @app.route("/api/properties", methods=["GET"])
 def get_properties():
-    """STRICTLY READ-ONLY: Returns memory instantly or asks frontend to sync."""
+    """Provides the current status and memory (if ready)."""
     global SERVER_CACHE
 
-    if SERVER_CACHE["properties"] is None:
-        return jsonify({"message": "Cache empty. Needs manual sync.", "data": None}), 200
-
     return jsonify({
+        "status": SERVER_CACHE["status"],
         "data": {
             "properties": SERVER_CACHE["properties"],
             "zones": SERVER_CACHE["zones"]
         }
     }), 200
 
-
 @app.route("/api/sync", methods=["POST"])
 def force_sync():
-    """THE HEAVY LIFTER: Fetches fresh data from CRM and updates memory."""
+    """Instantly triggers the background thread and returns 202."""
     global SERVER_CACHE
     
     if not TWENTY_API_KEY or not TWENTY_API_URL:
         return jsonify({"error": "Missing TWENTY_API_KEY or TWENTY_API_URL"}), 500
 
-    try:
-        SERVER_CACHE["properties"] = fetch_all("properties", "properties")
-        SERVER_CACHE["zones"] = fetch_all("zoneallocations", "zoneallocations")
-        
-        return jsonify({
-            "message": "Sync successful",
-            "data": {
-                "properties": SERVER_CACHE["properties"],
-                "zones": SERVER_CACHE["zones"]
-            }
-        }), 200
-        
-    except Exception as e:
-        print("=" * 80)
-        print("FULL EXCEPTION")
-        traceback.print_exc()
-        print("=" * 80)
-        return jsonify({"error": str(e)}), 500
+    if SERVER_CACHE["status"] == "syncing":
+        return jsonify({"message": "Sync already in progress"}), 200
+
+    thread = threading.Thread(target=background_sync_task)
+    thread.start()
+    
+    return jsonify({"message": "Background sync started"}), 202
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
