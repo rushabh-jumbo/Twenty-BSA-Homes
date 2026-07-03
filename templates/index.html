@@ -75,8 +75,7 @@
         <div style="text-align:right; display: flex; align-items: center;">
             <button class="btn-sync" onclick="fetchLiveProperties()" id="sync-btn">🔄 Sync CRM Data</button>
             <div style="text-align: right;">
-                <div id="sync-status" style="font-size:12px; margin-bottom: 2px; color:white;">Status: Ready</div>
-                <div id="last-sync" style="font-size:11px; color:#cfcfcf;">Last Sync: Never</div>
+                <div id="sync-status" style="font-size:12px; margin-bottom: 2px; color:white;">Status: Loading...</div>
             </div>
         </div>
     </div>
@@ -150,9 +149,7 @@
             <div class="control-group">
                 <label>Floor</label>
                 <div class="multi-select-container" id="filter-floor-container">
-                    <label class="multi-select-item"><input type="checkbox" value="Ground" class="floor-cb"> Ground</label>
-                    <label class="multi-select-item"><input type="checkbox" value="20+" class="floor-cb"> 20+</label>
-                </div>
+                    </div>
             </div>
             
             <div>
@@ -200,13 +197,16 @@
         let buildingGroups = {};
         let zoneLookup = {}; 
 
-        let searchMode = 'existing'; // 'existing' | 'freeform'
+        let searchMode = 'existing'; 
         let selectedTargetProperty = null; 
-        let currentFilteredProperties = []; // for whatsapp export
+        let currentFilteredProperties = [];
+
+        const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+                ? "http://localhost:5000"
+                : "https://twenty-bsa-homes.onrender.com"; // UPDATE this if you change platforms
 
         // === 1. INIT UI & MAP ===
         function init() {
-            // Populate Floor Checkboxes
             const floorContainer = document.getElementById('filter-floor-container');
             let floorHtml = `<label class="multi-select-item"><input type="checkbox" value="Ground" class="floor-cb"> Ground</label>`;
             for(let i=1; i<=20; i++){
@@ -215,7 +215,6 @@
             floorHtml += `<label class="multi-select-item"><input type="checkbox" value="20+" class="floor-cb"> 20+</label>`;
             floorContainer.innerHTML = floorHtml;
 
-            // Map Setup
             map = L.map('map', { preferCanvas: true }).setView([12.9716, 77.5946], 11);
             L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
                 attribution: '&copy; OpenStreetMap contributors'
@@ -246,12 +245,9 @@
             anchorMarker = L.marker([lat, lng], {
                 icon: L.icon({
                     iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
-                    iconSize: [25, 41],
-                    iconAnchor: [12, 41],
-                    popupAnchor: [1, -34]
+                    iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34]
                 })
             }).bindPopup("<b>⚓ Anchor Point</b>").addTo(map);
-            
             anchorMarker.openPopup();
         }
 
@@ -276,54 +272,66 @@
             return configString.replace('OPT', '').replace('_5', '.5').replace(/_/g, ' ').trim();
         }
 
-        // === 2. FETCH DATA ===
-        const API_BASE =
-            window.location.hostname === "localhost"
-                ? "http://localhost:5000"
-                : "https://twenty-bsa-homes.onrender.com";
-
-        async function fetchLiveProperties() {
-
-            const syncBtn = document.getElementById("sync-btn");
-
-            syncBtn.disabled = true;
-            syncBtn.innerText = "⏳ Syncing...";
-
-            document.getElementById("sync-status").innerHTML =
-                "Status: 🟡 In Progress";
-
+        // === 2. DATA FETCHING (CACHE & SYNC) ===
+        
+        // Triggers on page load
+        async function loadCachedProperties() {
             try {
-
-                const response = await fetch(
-                    `${API_BASE}/api/properties`
-                );
-                if (!response.ok) throw new Error("Backend connection failed");
+                const response = await fetch(`${API_BASE}/api/properties`);
                 const rawData = await response.json();
                 
                 if (rawData.data && rawData.data.properties) {
-                    masterCatalog = rawData.data.properties || [];
-                    masterZones = rawData.data.zones || [];
+                    processIncomingData(rawData);
+                    document.getElementById("sync-status").innerHTML = "Status: 🟢 Loaded from Cache";
+                } else {
+                    document.getElementById("sync-status").innerHTML = "Status: 🟡 Cache Empty. Please Sync.";
+                }
+            } catch (error) {
+                console.error("Failed to load initial data", error);
+                document.getElementById("sync-status").innerHTML = "Status: 🔴 Connection Error";
+            }
+        }
 
-                    zoneLookup = {};
-                    masterZones.forEach(zone => zoneLookup[zone.id] = zone);
-                    
-                    renderZones();
-                    processBuildings(masterCatalog);
-                    
-                    document.getElementById('global-search').disabled = false;
+        // Triggers ONLY when button is clicked
+        async function fetchLiveProperties() {
+            const syncBtn = document.getElementById("sync-btn");
+            syncBtn.disabled = true;
+            syncBtn.innerText = "⏳ Syncing CRM (~5 mins)...";
+            document.getElementById("sync-status").innerHTML = "Status: 🟡 Fetching Fresh Data";
+
+            try {
+                const response = await fetch(`${API_BASE}/api/sync`, { method: 'POST' });
+                if (!response.ok) throw new Error("Backend sync failed");
+                
+                const rawData = await response.json();
+                
+                if (rawData.data && rawData.data.properties) {
+                    processIncomingData(rawData);
                 }
                 
                 syncBtn.disabled = false;
                 syncBtn.innerText = "🔄 Sync CRM Data";
-                document.getElementById("sync-status").innerHTML = "Status: 🟢 Synced";
-                document.getElementById("last-sync").innerHTML = "Last Sync: " + new Date().toLocaleString();
+                document.getElementById("sync-status").innerHTML = "Status: 🟢 Synced & Cached";
                 
             } catch (error) {
                 console.error(error);
                 syncBtn.disabled = false;
                 syncBtn.innerText = "🔄 Sync CRM Data";
-                document.getElementById("sync-status").innerHTML = "Status: 🔴 Failed";
+                document.getElementById("sync-status").innerHTML = "Status: 🔴 Sync Failed";
             }
+        }
+
+        function processIncomingData(rawData) {
+            masterCatalog = rawData.data.properties || [];
+            masterZones = rawData.data.zones || [];
+
+            zoneLookup = {};
+            masterZones.forEach(zone => zoneLookup[zone.id] = zone);
+            
+            renderZones();
+            processBuildings(masterCatalog);
+            
+            document.getElementById('global-search').disabled = false;
         }
 
         // === 3. PROCESS & MAP ===
@@ -337,14 +345,10 @@
 
                 if (!buildingGroups[bldgId]) {
                     buildingGroups[bldgId] = {
-                        id: bldgId,
-                        name: prop.building.name || "Unknown Building",
-                        lat: parseFloat(prop.building.latitude),
-                        lng: parseFloat(prop.building.longitude),
-                        zoneId: prop.building.zoneId || null,
-                        zoneName: zone ? zone.name : "Unknown",
-                        properties: [],
-                        marker: null
+                        id: bldgId, name: prop.building.name || "Unknown Building",
+                        lat: parseFloat(prop.building.latitude), lng: parseFloat(prop.building.longitude),
+                        zoneId: prop.building.zoneId || null, zoneName: zone ? zone.name : "Unknown",
+                        properties: [], marker: null
                     };
                 }
                 buildingGroups[bldgId].properties.push(prop);
@@ -381,8 +385,6 @@
                 const marker = L.marker([bldg.lat, bldg.lng], { icon: getZoneMarker(bldg.zoneName) })
                     .bindPopup(popupHTML)
                     .addTo(propertyLayerGroup);
-                
-                // Store marker ref for programmatic zooming/popup opening
                 bldg.marker = marker;
             });
         }
@@ -394,10 +396,8 @@
                     if (!zone.geoFence || zone.geoFence.length < 3) return;
                     const coordinates = zone.geoFence.map(point => JSON.parse(point));
                     const polygon = L.polygon(coordinates, {
-                        color: getZoneColour(zone.name),
-                        fillColor: getZoneColour(zone.name),
-                        fillOpacity: 0.12,
-                        weight: 2
+                        color: getZoneColour(zone.name), fillColor: getZoneColour(zone.name),
+                        fillOpacity: 0.12, weight: 2
                     }).addTo(zoneLayerGroup);
                     polygon.bringToBack();
                 } catch (e) {}
@@ -406,7 +406,6 @@
 
         // === 4. SEARCH & AUTOCOMPLETE ===
         function setupAutocompleteListeners() {
-            // Global Search
             const globalSearch = document.getElementById('global-search');
             const globalDrop = document.getElementById('global-search-dropdown');
             
@@ -415,12 +414,10 @@
                 if(query.length < 2) { globalDrop.style.display = 'none'; return; }
                 
                 let matches = [];
-                // Search Properties
                 masterCatalog.forEach(p => {
                     if(matches.length > 15) return;
                     if(p.name && p.name.toLowerCase().includes(query)) matches.push({type: 'Property', item: p, display: p.name});
                 });
-                // Search Buildings & Zones via buildingGroups
                 Object.values(buildingGroups).forEach(b => {
                     if(matches.length > 25) return;
                     if(b.name.toLowerCase().includes(query) || b.zoneName.toLowerCase().includes(query)) {
@@ -431,24 +428,17 @@
                 renderDropdown(globalDrop, matches, (match) => {
                     let targetLat, targetLng, bldgId;
                     if (match.type === 'Property') {
-                        targetLat = match.item.building.latitude;
-                        targetLng = match.item.building.longitude;
-                        bldgId = match.item.building.id;
+                        targetLat = match.item.building.latitude; targetLng = match.item.building.longitude; bldgId = match.item.building.id;
                     } else {
-                        targetLat = match.item.lat;
-                        targetLng = match.item.lng;
-                        bldgId = match.item.id;
+                        targetLat = match.item.lat; targetLng = match.item.lng; bldgId = match.item.id;
                     }
                     map.setView([targetLat, targetLng], 17);
-                    if (buildingGroups[bldgId] && buildingGroups[bldgId].marker) {
-                        buildingGroups[bldgId].marker.openPopup();
-                    }
+                    if (buildingGroups[bldgId] && buildingGroups[bldgId].marker) buildingGroups[bldgId].marker.openPopup();
                     globalSearch.value = match.display;
                     globalDrop.style.display = 'none';
                 });
             });
 
-            // Existing Home Target Search
             const existSearch = document.getElementById('existing-home-search');
             const existDrop = document.getElementById('existing-search-dropdown');
 
@@ -466,20 +456,16 @@
                     document.getElementById('target-prop-price').innerText = "₹" + formatPriceIndian(p);
                     document.getElementById('selected-target-card').style.display = 'block';
                     
-                    existSearch.value = "";
-                    existDrop.style.display = 'none';
+                    existSearch.value = ""; existDrop.style.display = 'none';
 
                     if (p.building && p.building.latitude) {
                         map.setView([p.building.latitude, p.building.longitude], 16);
                         setAnchor(p.building.latitude, p.building.longitude);
-                        if (buildingGroups[p.building.id] && buildingGroups[p.building.id].marker) {
-                            buildingGroups[p.building.id].marker.openPopup();
-                        }
+                        if (buildingGroups[p.building.id] && buildingGroups[p.building.id].marker) buildingGroups[p.building.id].marker.openPopup();
                     }
                 });
             });
 
-            // Close dropdowns on outside click
             document.addEventListener('click', (e) => {
                 if(!e.target.closest('#global-search-container')) globalDrop.style.display = 'none';
                 if(!e.target.closest('#mode-existing-container')) existDrop.style.display = 'none';
@@ -488,10 +474,7 @@
 
         function renderDropdown(container, matches, onSelect) {
             container.innerHTML = "";
-            if(matches.length === 0) {
-                container.style.display = 'none';
-                return;
-            }
+            if(matches.length === 0) { container.style.display = 'none'; return; }
             matches.forEach(m => {
                 let div = document.createElement('div');
                 div.className = 'autocomplete-item';
@@ -509,7 +492,7 @@
 
         // === 5. FILTER ENGINE ===
         function checkFloor(propFloor, selectedFloors) {
-            if (selectedFloors.length === 0) return true; // Any
+            if (selectedFloors.length === 0) return true; 
             if (!propFloor) return false;
             let f = propFloor.toString().toLowerCase().trim();
             if (f === 'ground' || f === 'g') return selectedFloors.includes('Ground');
@@ -521,25 +504,15 @@
         }
 
         function applyFilters() {
-            if (!anchorCoords) {
-                alert("Please select a Target Property or Right-Click on the map to set an Anchor point first.");
-                return;
-            }
+            if (!anchorCoords) { alert("Please select a Target Property or Right-Click on the map to set an Anchor point first."); return; }
 
-            // Determine Target Price based on Mode
             let targetPrice = null;
             if (searchMode === 'existing') {
-                if (!selectedTargetProperty) {
-                    alert("Please select a Target Property to search around, or switch to Free-form mode.");
-                    return;
-                }
+                if (!selectedTargetProperty) { alert("Please select a Target Property to search around, or switch to Free-form mode."); return; }
                 targetPrice = getRawPrice(selectedTargetProperty);
             } else {
                 targetPrice = parseFloat(document.getElementById('filter-price').value);
-                if (!targetPrice || isNaN(targetPrice)) {
-                    alert("Please enter a Target Price in Free-form mode.");
-                    return;
-                }
+                if (!targetPrice || isNaN(targetPrice)) { alert("Please enter a Target Price in Free-form mode."); return; }
             }
 
             const maxDist = parseFloat(document.getElementById('filter-distance').value);
@@ -560,10 +533,7 @@
                 
                 if (distanceKm <= maxDist) {
                     const matchingProps = bldg.properties.filter(p => {
-                        // Skip the EXACT target property if we are in existing mode
-                        if (searchMode === 'existing' && selectedTargetProperty && p.id === selectedTargetProperty.id) {
-                            return false; 
-                        }
+                        if (searchMode === 'existing' && selectedTargetProperty && p.id === selectedTargetProperty.id) return false; 
 
                         let configMatch = (reqConfig === 'ALL' || p.configuration === reqConfig);
                         let facingMatch = (reqFacing === 'ALL' || (p.facing && p.facing.toLowerCase() === reqFacing.toLowerCase()));
@@ -578,26 +548,19 @@
                         }
                         
                         if (configMatch && facingMatch && floorMatch && priceMatch) {
-                            currentFilteredProperties.push(p);
-                            return true;
+                            currentFilteredProperties.push(p); return true;
                         }
                         return false;
                     });
 
-                    if (matchingProps.length > 0) {
-                        filteredBuildings[bldg.id] = { ...bldg, properties: matchingProps };
-                    }
+                    if (matchingProps.length > 0) filteredBuildings[bldg.id] = { ...bldg, properties: matchingProps };
                 }
             });
 
             renderMap(filteredBuildings);
             renderTable(currentFilteredProperties);
             
-            if(currentFilteredProperties.length > 0) {
-                document.getElementById('btn-whatsapp').style.display = 'block';
-            } else {
-                document.getElementById('btn-whatsapp').style.display = 'none';
-            }
+            document.getElementById('btn-whatsapp').style.display = currentFilteredProperties.length > 0 ? 'block' : 'none';
         }
 
         // === 6. RESULTS TABLE ===
@@ -606,10 +569,7 @@
             const tbody = document.getElementById('results-body');
             tbody.innerHTML = '';
 
-            if(properties.length === 0) {
-                container.style.display = 'none';
-                return;
-            }
+            if(properties.length === 0) { container.style.display = 'none'; return; }
 
             properties.forEach(p => {
                 const tr = document.createElement('tr');
@@ -623,29 +583,22 @@
                     <td style="color:#007bff;font-weight:bold;">₹${formatPriceIndian(p)}</td>
                     <td>${p.propertyStatus || '-'}</td>
                 `;
-                
                 tr.onclick = () => {
                     if (p.building && p.building.latitude) {
                         map.setView([p.building.latitude, p.building.longitude], 17);
-                        if (buildingGroups[p.building.id] && buildingGroups[p.building.id].marker) {
-                            buildingGroups[p.building.id].marker.openPopup();
-                        }
+                        if (buildingGroups[p.building.id] && buildingGroups[p.building.id].marker) buildingGroups[p.building.id].marker.openPopup();
                     }
                 };
-                
                 tbody.appendChild(tr);
             });
-            
             container.style.display = 'block';
         }
 
         function clearFilters() {
             if (anchorMarker) map.removeLayer(anchorMarker);
-            anchorCoords = null;
-            clearTargetProperty();
+            anchorCoords = null; clearTargetProperty();
             
-            document.getElementById('filter-price').value = '';
-            document.getElementById('filter-config').value = 'ALL';
+            document.getElementById('filter-price').value = ''; document.getElementById('filter-config').value = 'ALL';
             document.getElementById('filter-facing').value = 'ALL';
             document.querySelectorAll('.floor-cb').forEach(cb => cb.checked = false);
             
@@ -661,14 +614,12 @@
             if(currentFilteredProperties.length === 0) return;
             
             let targetName = (searchMode === 'existing' && selectedTargetProperty) ? selectedTargetProperty.name : "your target criteria";
-            
             let text = `Thanks for showing interest in ${targetName}.\n\nIn addition to this property, we recommend visiting similar properties nearby to better understand the current market offerings.\n\nRecommended homes:\n\n`;
             
             currentFilteredProperties.forEach(p => {
                 let loc = p.building?.name ? ` (${p.building.name})` : '';
                 text += `• ${p.name}${loc} - ₹${formatPriceIndian(p)} | ${cleanConfigName(p.configuration)}\n`;
             });
-            
             text += `\nWe'd be happy to help schedule visits for these as well.`;
             
             navigator.clipboard.writeText(text).then(() => {
@@ -696,6 +647,7 @@
 
         // Boot
         init();
+        loadCachedProperties();
     </script>
 </body>
 </html>
